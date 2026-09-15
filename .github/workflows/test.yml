@@ -1,0 +1,122 @@
+name: tests
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+          pip install -e .
+
+      - name: Run tests
+        # MCMC is deselected here and covered by the sampling job below, so a
+        # slow sampler cannot hold up the fast feedback everything else gives.
+        run: pytest -m "not mcmc" --cov=cip --cov-report=term-missing --cov-report=xml
+
+      - name: Verify the package imports from an installed location
+        run: |
+          cd "${RUNNER_TEMP}"
+          python -c "import cip; print(cip.__version__)"
+
+      - name: Upload coverage
+        if: matrix.python-version == '3.11'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.xml
+          retention-days: 7
+
+  sampling:
+    # The MCMC tests, which are slow and worth running separately rather than
+    # skipping: a Bayesian result from chains that did not converge is numbers,
+    # not inference.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+          pip install -e .
+      - name: Run MCMC tests
+        run: pytest -m mcmc -q
+
+  pipeline:
+    # Every analysis runs on every change at the reduced configuration, so a
+    # break in design, estimation, uplift or the decision layer cannot reach
+    # main unnoticed. The published benchmark uses configs/default.yaml.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -e .
+
+      - name: Analyse a randomised experiment
+        run: python scripts/run_experiment.py --config configs/fast.yaml --dataset thornton
+
+      - name: Score the estimators against a known effect
+        run: python scripts/run_benchmark.py --config configs/fast.yaml --benchmark simulation --runs 10
+
+      - name: Fit and score uplift models
+        run: python scripts/run_uplift.py --config configs/fast.yaml --units 3000 --folds 2
+
+      - name: Check the benchmark actually measured a bias
+        # A benchmark that reports no bias for the naive comparison has lost the
+        # thing it exists to measure.
+        run: |
+          python - <<'PY'
+          import json
+          report = json.load(open("reports/benchmark_report.json"))
+          naive = next(r for r in report["simulation"]["results"] if r["method"] == "naive")
+          ipw = next(r for r in report["simulation"]["results"] if r["method"] == "IPW")
+          assert abs(naive["bias"]) > 0.5, f"confounding vanished: {naive['bias']}"
+          assert abs(ipw["bias"]) < abs(naive["bias"]) / 5, "IPW stopped removing bias"
+          print(f"naive bias {naive['bias']:.4f}, IPW bias {ipw['bias']:.4f}")
+          PY
+
+      - name: Upload the reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-reports
+          path: reports/
+          retention-days: 30

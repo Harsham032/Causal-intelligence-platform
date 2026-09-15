@@ -43,8 +43,10 @@ class WeightedResult:
     effective_sample_size: float
     max_weight: float
     method: str
+    interval_is_trustworthy: bool = True
+    interval_caveat: str = ""
 
-    def to_dict(self) -> dict[str, float | str]:
+    def to_dict(self) -> dict[str, float | str | bool]:
         return {
             "estimand": self.estimand,
             "estimate": self.estimate,
@@ -56,6 +58,8 @@ class WeightedResult:
             "effective_sample_size": self.effective_sample_size,
             "max_weight": self.max_weight,
             "method": self.method,
+            "interval_is_trustworthy": self.interval_is_trustworthy,
+            "interval_caveat": self.interval_caveat,
         }
 
 
@@ -175,6 +179,20 @@ def matched_estimate(
     control inside it is dropped rather than matched to something distant, and
     the count of dropped units is reported: an ATT estimated after discarding a
     quarter of the treated is an effect for a different population.
+
+    **The interval this returns is not trustworthy, and the result says so.**
+    The standard error treats the matched differences as independent draws. They
+    are not: a control unit can be matched to several treated units, and the
+    propensity score they were matched on was itself estimated from the same
+    data. Measured over 60 simulated studies, the nominal 95% interval covered
+    the truth 10% of the time while the point estimate stayed close (bias 0.19
+    against a true effect of 1.0).
+
+    Abadie and Imbens showed that the bootstrap does not fix this either, so
+    there is no cheap correction to apply; their variance estimator is the real
+    answer and is not implemented here. Use the point estimate, and take the
+    interval from IPW or DML instead - both of which were measured to cover
+    correctly or conservatively.
     """
     y = np.asarray(outcome, dtype=np.float64)
     t = np.asarray(treatment, dtype=np.int64)
@@ -248,6 +266,12 @@ def matched_estimate(
         effective_sample_size=float(diffs.size),
         max_weight=1.0,
         method=f"{n_neighbours}-nearest-neighbour matching on logit propensity ({caliper_text})",
+        interval_is_trustworthy=False,
+        interval_caveat=(
+            "matched differences are treated as independent, which they are not: controls are "
+            "reused and the propensity score was estimated. Measured coverage of this nominal "
+            "95% interval is 0.10. The point estimate is sound; take the interval from IPW or DML."
+        ),
     )
     logger.info(
         "matching_estimated",
