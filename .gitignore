@@ -1,0 +1,59 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+build/
+dist/
+*.egg-info/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Testing and type caches
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+
+# Secrets
+.env
+.env.local
+*.pem
+*.key
+!.env.example
+
+# Data - regenerate with `make data`
+data/raw/
+data/interim/
+data/processed/
+data/external/
+!data/README.md
+
+# Analytics database and reports
+*.duckdb
+*.duckdb.wal
+reports/*
+!reports/.gitkeep
+
+# Model and inference artifacts
+artifacts/
+*.joblib
+*.pkl
+*.nc
+
+# Logs
+logs/
+*.log
+
+# Editors and OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+.ipynb_checkpoints/

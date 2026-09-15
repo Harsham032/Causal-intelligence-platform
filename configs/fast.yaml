@@ -1,0 +1,56 @@
+# Reduced configuration for continuous integration and quick iteration.
+# Same analyses as configs/default.yaml with fewer resamples and shorter MCMC
+# chains, so a full run finishes in well under a minute. Results from this
+# configuration are not the published benchmark - docs/results.md reports
+# configs/default.yaml.
+run:
+  name: fast
+  seed: 20260101
+  output_dir: reports
+
+design:
+  # Parameters for sample-size and power calculations.
+  alpha: 0.05
+  power: 0.80
+  two_sided: true
+  # Smallest effect the experiment must be able to detect. Stated as a
+  # proportion of the control mean, because an absolute value is meaningless
+  # until you know the scale of the outcome.
+  relative_mde: 0.10
+  # Balance check: a standardised mean difference above this flags a covariate
+  # as imbalanced between arms.
+  balance_threshold: 0.10
+
+frequentist:
+  # Benjamini-Hochberg controls the false discovery rate, which is the right
+  # target when screening many metrics; Bonferroni controls the family-wise
+  # error rate and is used when a single false positive is costly.
+  multiple_testing: benjamini-hochberg
+  bootstrap_resamples: 200
+
+bayesian:
+  draws: 400
+  tune: 400
+  chains: 2
+  target_accept: 0.9
+  # Threshold for "treatment beats control by a margin worth shipping".
+  rope_relative: 0.01
+
+causal:
+  propensity_model: logistic
+  trim_propensity: [0.01, 0.99]
+  n_folds: 5
+  n_estimators: 100
+  min_samples_leaf: 20
+
+uplift:
+  n_bins: 20
+  n_estimators: 100
+  max_depth: 6
+  learning_rate: 0.1
+
+decision:
+  # A treatment ships only when the effect is both statistically credible and
+  # large enough to be worth the cost of the change.
+  min_probability_of_benefit: 0.95
+  min_relative_effect: 0.01
