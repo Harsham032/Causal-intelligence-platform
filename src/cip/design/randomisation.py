@@ -36,6 +36,12 @@ class CovariateBalance:
     control_mean: float
     standardised_difference: float
     balanced: bool
+    n_missing: int = 0
+
+    @property
+    def computable(self) -> bool:
+        """False when missing data leaves nothing to compare."""
+        return bool(np.isfinite(self.standardised_difference))
 
     def to_dict(self) -> dict[str, float | str | bool]:
         return {
@@ -44,6 +50,8 @@ class CovariateBalance:
             "control_mean": self.control_mean,
             "standardised_difference": self.standardised_difference,
             "balanced": self.balanced,
+            "n_missing": float(self.n_missing),
+            "computable": self.computable,
         }
 
 
@@ -60,17 +68,24 @@ class BalanceReport:
 
     @property
     def imbalanced(self) -> list[CovariateBalance]:
-        return [c for c in self.covariates if not c.balanced]
+        return [c for c in self.covariates if c.computable and not c.balanced]
+
+    @property
+    def not_computable(self) -> list[CovariateBalance]:
+        """Covariates whose balance could not be measured, usually missing data."""
+        return [c for c in self.covariates if not c.computable]
 
     @property
     def passed(self) -> bool:
-        return not self.imbalanced and self.share_pvalue >= 0.01
+        return not self.imbalanced and not self.not_computable and self.share_pvalue >= 0.01
 
     @property
     def worst(self) -> CovariateBalance | None:
-        if not self.covariates:
+        """The largest measurable imbalance; ignores covariates that could not be computed."""
+        measurable = [c for c in self.covariates if c.computable]
+        if not measurable:
             return None
-        return max(self.covariates, key=lambda c: abs(c.standardised_difference))
+        return max(measurable, key=lambda c: abs(c.standardised_difference))
 
     def reason(self) -> str:
         if self.passed:
@@ -86,6 +101,9 @@ class BalanceReport:
                 f"{c.covariate} ({c.standardised_difference:+.3f})" for c in self.imbalanced
             )
             problems.append(f"imbalanced beyond {self.threshold:.2f}: {names}")
+        if self.not_computable:
+            names = ", ".join(f"{c.covariate} ({c.n_missing} missing)" for c in self.not_computable)
+            problems.append(f"balance could not be measured: {names}")
         return "; ".join(problems)
 
     def to_frame(self) -> pd.DataFrame:
@@ -136,14 +154,36 @@ def check_balance(
     results: list[CovariateBalance] = []
     for name in covariates:
         values = frame[name].to_numpy(dtype=np.float64)
-        smd = standardised_difference(values[treated_mask], values[~treated_mask])
+        observed = np.isfinite(values)
+        n_missing = int((~observed).sum())
+
+        treated_values = values[treated_mask & observed]
+        control_values = values[~treated_mask & observed]
+        # Missing data is reported as such rather than silently producing a NaN
+        # that then reads as "imbalanced". Those are different findings: one says
+        # the arms differ, the other says nobody can tell.
+        if treated_values.size < 2 or control_values.size < 2:
+            results.append(
+                CovariateBalance(
+                    covariate=name,
+                    treated_mean=float("nan"),
+                    control_mean=float("nan"),
+                    standardised_difference=float("nan"),
+                    balanced=False,
+                    n_missing=n_missing,
+                )
+            )
+            continue
+
+        smd = standardised_difference(treated_values, control_values)
         results.append(
             CovariateBalance(
                 covariate=name,
-                treated_mean=float(values[treated_mask].mean()),
-                control_mean=float(values[~treated_mask].mean()),
+                treated_mean=float(treated_values.mean()),
+                control_mean=float(control_values.mean()),
                 standardised_difference=smd,
-                balanced=abs(smd) <= threshold,
+                balanced=bool(np.isfinite(smd)) and abs(smd) <= threshold,
+                n_missing=n_missing,
             )
         )
 
@@ -163,6 +203,7 @@ def check_balance(
         "balance_checked",
         covariates=len(results),
         imbalanced=len(report.imbalanced),
+        not_computable=len(report.not_computable),
         share_pvalue=round(share_pvalue, 4),
         passed=report.passed,
     )
